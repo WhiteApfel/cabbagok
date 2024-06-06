@@ -1,21 +1,11 @@
-REQUIREMENTS="requirements-dev.txt"
-
-all: test
-
-
-flake8:
-	@pip install flake8
-	@flake8 cabbage tests
-
-
 isort:
-	@isort -rc cabbage -w 120
-	@isort -rc tests -w 120
+	@isort --profile black ./cabbagok/
+	@isort --profile black ./tests/
 
 
-lint:
-	@pip install pylint==2.2.2
-	@pylint cabbage
+black:
+	@black ./cabbagok/ --preview
+	@black ./tests/ --preview
 
 
 install: uninstall
@@ -24,11 +14,11 @@ install: uninstall
 
 
 uninstall:
-	@pip uninstall cabbage -y
+	@pip uninstall cabbagok -y
 
 
 test:
-	@py.test --cov=cabbage
+	@pytest --cov=cabbagok
 
 
 clean:
@@ -44,7 +34,6 @@ clean:
 	@rm -rf htmlcov
 	@rm -rf build
 	@rm -rf cover
-	@python setup.py clean
 	@rm -rf .tox
 	@rm -f .flake
 	@rm -rf .pytest_cache
@@ -55,4 +44,14 @@ install-dev: uninstall
 	@pip install -Ur requirements-dev.txt
 	@pip install -e .
 
-.PHONY: all mypy isort install-dev uninstall clean test
+build:
+	@python setup.py sdist bdist_wheel
+
+upload:
+	@twine upload dist/*
+
+publish:
+	@make clean
+	@make build
+	@make upload
+	@make clean

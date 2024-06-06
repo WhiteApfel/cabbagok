@@ -5,7 +5,7 @@ from os import getenv
 
 import pytest
 
-import cabbage
+import cabbagok
 
 logger = logging.getLogger(__name__)
 
@@ -17,8 +17,8 @@ pytestmark = pytest.mark.asyncio
 class FakeRpcServer:
     def __init__(self, loop=None):
         self.loop = loop or asyncio.get_event_loop()
-        self.connection = cabbage.AmqpConnection(hosts=[(TEST_RABBITMQ_HOST, 5672)], loop=self.loop)
-        self.rpc = cabbage.AsyncAmqpRpc(
+        self.connection = cabbagok.AmqpConnection(hosts=[(TEST_RABBITMQ_HOST, 5672)], loop=self.loop)
+        self.rpc = cabbagok.AsyncAmqpRpc(
             connection=self.connection,
             subscriptions=[(self.handle, 'fake', '', 'fake')]
         )
@@ -41,8 +41,8 @@ async def test_ok():
     fake_rpc.responses['abc'] = '123'
     await fake_rpc.run()
 
-    conn = cabbage.AmqpConnection(hosts=[(TEST_RABBITMQ_HOST, 5672)])
-    rpc = cabbage.AsyncAmqpRpc(connection=conn)
+    conn = cabbagok.AmqpConnection(hosts=[(TEST_RABBITMQ_HOST, 5672)])
+    rpc = cabbagok.AsyncAmqpRpc(connection=conn)
     await rpc.run()
     result = await rpc.send_rpc('fake', data='abc', await_response=True)
     assert result == '123'

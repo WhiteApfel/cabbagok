@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 import inspect
 
-from cabbage.amqp import AsyncAmqpRpc, ServiceUnavailableError
+from cabbagok.amqp import AsyncAmqpRpc, ServiceUnavailableError
 
 
 class FakeAsyncAmqpRpc(AsyncAmqpRpc):

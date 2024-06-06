@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 import itertools
 
-from cabbage.utils import ExponentialBackoff, FibonaccianBackoff
+from cabbagok.utils import ExponentialBackoff, FibonaccianBackoff
 
 
 class TestExponentialBackoff:

@@ -17,7 +17,7 @@ from aioamqp.protocol import AmqpProtocol, CONNECTING, OPEN
 
 from .utils import FibonaccianBackoff
 
-logger = logging.getLogger('cabbage')
+logger = logging.getLogger('cabbagok')
 
 
 class ServiceUnavailableError(Exception):
@@ -197,7 +197,7 @@ class AsyncAmqpRpc:
         Callable[[bytes], Optional[bytes]],
         Callable[[str], Awaitable[Optional[str]]],
         Callable[[bytes], Awaitable[Optional[bytes]]],
-    ], queue: str, exchange: str = '', routing_key: str = None) -> str:
+    ], queue: str, exchange: str = '', routing_key: str = None, add_to_start: bool = False) -> str:
         """
         Subscribe to a specific queue. Exchange and queue will be created if they do not exist.
 
@@ -207,6 +207,7 @@ class AsyncAmqpRpc:
         :param exchange: exchange name, default '' (default AMQP exchange)
         :param queue: queue name
         :param routing_key: routing key, default same as `queue`
+        :param add_to_start: add to start_subscriptions
         :return: consumer_tag
         """
         if routing_key is None:
@@ -219,6 +220,9 @@ class AsyncAmqpRpc:
         )
         consumer_tag = result['consumer_tag']
         self._subscriptions.add(consumer_tag)
+        self.start_subscriptions.append(
+            (request_handler, queue, exchange, routing_key)
+        )
         logger.debug(f'subscribed to queue {queue}, bound to exchange {exchange} with key {routing_key} '
                      f'(consumer tag {consumer_tag})')
         return consumer_tag

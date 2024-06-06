@@ -1,6 +1,12 @@
 CHANGELOG
 =========
 
+1.1.0 (2024-04-04)
+------------------
+
+- Add `add_to_start=False` arg for queue subscribe
+- Updated aioamqp requirement
+
 1.0.0 (2019-06-04)
 ------------------
 

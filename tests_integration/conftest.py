@@ -9,7 +9,7 @@ import requests
 from asynctest import MagicMock
 from requests.auth import HTTPBasicAuth
 
-from cabbage import AmqpConnection, AsyncAmqpRpc
+from cabbagok import AmqpConnection, AsyncAmqpRpc
 
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s [%(levelname)s] %(name)s: %(message)s')
 
@@ -54,7 +54,7 @@ class Management:
                    json={'properties': {}, 'routing_key': routing_key, 'payload': data, 'payload_encoding': 'string'})
 
 
-TEST_VHOST = 'cabbage_test'
+TEST_VHOST = 'cabbagok_test'
 
 
 @pytest.fixture(scope='session')

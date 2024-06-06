@@ -2,7 +2,7 @@
 import asyncio
 import logging
 
-from cabbage import AmqpConnection, AsyncAmqpRpc
+from cabbagok import AmqpConnection, AsyncAmqpRpc
 
 logging.basicConfig(
     level=logging.DEBUG,

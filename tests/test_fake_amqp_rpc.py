@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 import pytest
 
-from cabbage import AmqpConnection, ServiceUnavailableError
-from cabbage.test_utils import FakeAsyncAmqpRpc
+from cabbagok import AmqpConnection, ServiceUnavailableError
+from cabbagok.test_utils import FakeAsyncAmqpRpc
 
 
 def request_handler(request):

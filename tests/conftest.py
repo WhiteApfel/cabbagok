@@ -1,18 +1,18 @@
 # -*- coding: utf-8 -*-
 import logging
+from unittest.mock import MagicMock
 
 import pytest
-from asynctest import MagicMock
 import aioamqp
 
-import cabbage
+import cabbagok
 
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s [%(levelname)s] %(name)s: %(message)s')
 
 
 @pytest.fixture
 def connection(event_loop):
-    conn = cabbage.AmqpConnection(hosts=[(HOST, 5672)], loop=event_loop)
+    conn = cabbagok.AmqpConnection(hosts=[(HOST, 5672)], loop=event_loop)
     conn.transport = MockTransport()
     conn.protocol = MockProtocol()
     return conn
@@ -20,7 +20,7 @@ def connection(event_loop):
 
 @pytest.fixture
 async def rpc(connection):
-    _rpc = cabbage.AsyncAmqpRpc(connection=connection)
+    _rpc = cabbagok.AsyncAmqpRpc(connection=connection)
     await _rpc.connect()
     return _rpc
 

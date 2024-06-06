@@ -5,12 +5,12 @@ from os import getenv
 import pytest
 from asynctest import MagicMock
 
-from cabbage import AmqpConnection, AsyncAmqpRpc
+from cabbagok import AmqpConnection, AsyncAmqpRpc
 
 pytestmark = pytest.mark.asyncio
 
 TEST_RABBITMQ_HOST = getenv('TEST_RABBITMQ_HOST', 'localhost')
-TEST_VHOST = 'cabbage_test'
+TEST_VHOST = 'cabbagok_test'
 
 
 async def test_sanity(management):

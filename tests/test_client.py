@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 import asyncio
+from unittest.mock import patch
 
 import pytest
-from asynctest import patch
 
-import cabbage
+import cabbagok
 from tests.conftest import RANDOM_QUEUE, TEST_DESTINATION, RESPONSE_CORR_ID, MockEnvelope, MockProperties, DELIVERY_TAG
 
 pytestmark = pytest.mark.asyncio
@@ -21,7 +21,7 @@ class TestSendRpc:
     ])
     async def test_no_response(self, connection, data, expected_payload):
         """Check that data is correctly encoded (if needed) and sent."""
-        rpc = cabbage.AsyncAmqpRpc(connection=connection)
+        rpc = cabbagok.AsyncAmqpRpc(connection=connection)
         await rpc.connect()
         await rpc.send_rpc(destination=TEST_DESTINATION, data=data, await_response=False)
         rpc.channel.basic_publish.assert_called_once_with(
@@ -35,10 +35,10 @@ class TestSendRpc:
     ])
     async def test_await_response(self, connection, data, sent_payload, received_payload, expected_result):
         """Check that data returned by await_response is parsed and returned correctly."""
-        rpc = cabbage.AsyncAmqpRpc(connection=connection)
+        rpc = cabbagok.AsyncAmqpRpc(connection=connection)
         await rpc.connect()
-        with patch('cabbage.amqp.AsyncAmqpRpc._await_response', return_value=received_payload, autospec=True), \
-                patch('cabbage.amqp.uuid.uuid4', return_value=RESPONSE_CORR_ID):
+        with patch('cabbagok.amqp.AsyncAmqpRpc._await_response', return_value=received_payload, autospec=True), \
+                patch('cabbagok.amqp.uuid.uuid4', return_value=RESPONSE_CORR_ID):
             result = await rpc.send_rpc(destination=TEST_DESTINATION, data=data, await_response=True)
         assert result == expected_result
         rpc.channel.basic_publish.assert_called_once_with(
@@ -51,10 +51,10 @@ class TestSendRpc:
     ])
     async def test_correlation_id(self, connection, correlation_id, expected):
         """Check that correlation id either matches the custom id or is generated from uuid."""
-        rpc = cabbage.AsyncAmqpRpc(connection=connection)
+        rpc = cabbagok.AsyncAmqpRpc(connection=connection)
         await rpc.connect()
-        with patch('cabbage.amqp.AsyncAmqpRpc._await_response', return_value=b'response', autospec=True), \
-                patch('cabbage.amqp.uuid.uuid4', return_value=RESPONSE_CORR_ID):
+        with patch('cabbagok.amqp.AsyncAmqpRpc._await_response', return_value=b'response', autospec=True), \
+                patch('cabbagok.amqp.uuid.uuid4', return_value=RESPONSE_CORR_ID):
             await rpc.send_rpc(destination=TEST_DESTINATION, data='payload', await_response=True,
                                correlation_id=correlation_id)
         rpc.channel.basic_publish.assert_called_once_with(
@@ -66,6 +66,7 @@ class TestAwaitResponse:
     """AsyncAmqpRpc._await_response"""
 
     async def test_ok(self, rpc):
+        rpc = await rpc
         # schedule awaiting response in another Task
         task = asyncio.ensure_future(rpc._await_response(correlation_id=RESPONSE_CORR_ID, timeout=10.0))
         # but it's not executing yet
@@ -84,7 +85,8 @@ class TestAwaitResponse:
         assert set(rpc._responses.keys()) == set()
 
     async def test_timeout(self, rpc):
-        with pytest.raises(cabbage.ServiceUnavailableError):
+        rpc = await rpc
+        with pytest.raises(cabbagok.ServiceUnavailableError):
             await rpc._await_response(correlation_id=RESPONSE_CORR_ID, timeout=0)
         assert set(rpc._responses.keys()) == set()
 
@@ -94,6 +96,7 @@ class TestOnResponse:
 
     @pytest.mark.parametrize('body', [b'', b'Test message body. \xd0\xa2\xd0\xb5\xd1\x81\xd1\x82'])
     async def test_ok(self, rpc, body):
+        rpc = await rpc
         rpc._responses[RESPONSE_CORR_ID] = asyncio.Future()
         await rpc._on_response(channel=rpc.channel, body=body, envelope=MockEnvelope(), properties=MockProperties())
         assert rpc._responses[RESPONSE_CORR_ID].done()
@@ -102,5 +105,6 @@ class TestOnResponse:
         rpc.channel.basic_client_nack.assert_not_called()
 
     async def test_unexpected_tag(self, rpc):
+        rpc = await rpc
         await rpc._on_response(channel=rpc.channel, body=b'resp', envelope=MockEnvelope(), properties=MockProperties())
         rpc.channel.basic_client_ack.assert_called_once_with(delivery_tag=DELIVERY_TAG)
