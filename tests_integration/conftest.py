@@ -90,7 +90,9 @@ def require_rabbitmq_management():
     try:
         requests.get(f"http://{TEST_RABBITMQ_HOST}:15672/api/overview", timeout=1.0)
     except requests.RequestException:
-        pytest.skip("RabbitMQ Management API is not available (expected for integration tests)")
+        pytest.skip(
+            "RabbitMQ Management API is not available (expected for integration tests)"
+        )
 
 
 @pytest.fixture(scope="function", autouse=True)

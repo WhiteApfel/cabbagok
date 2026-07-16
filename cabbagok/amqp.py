@@ -3,18 +3,13 @@ import asyncio
 import inspect
 import logging
 import random
-import socket
-import ssl as ssl_module
 import uuid
 from functools import partial
 from itertools import cycle
 from typing import Optional, Callable, Union, Awaitable, Mapping, Dict
 
-from aioamqp.channel import Channel
-from aioamqp.envelope import Envelope
-from aioamqp import exceptions as aioamqp_exceptions
-from aioamqp.properties import Properties
-from aioamqp.protocol import AmqpProtocol, CONNECTING, OPEN
+import aio_pika
+from aio_pika.exceptions import AMQPException
 
 from .utils import FibonaccianBackoff
 
@@ -41,21 +36,18 @@ class AmqpConnection:
         :param password: AMQP password, default guest
         :param virtualhost: AMQP virtual host, default /
         :param loop: asyncio event loop, default current event loop
-        :param ssl: bool or SSLContext, uses default ssl context if True, default False
+        :param ssl: bool, uses ssl if True, default False
         """
-        self.loop = loop or asyncio.get_event_loop()
+        self.loop = loop
         self.username = username
         self.password = password
         self.virtualhost = virtualhost
         self.hosts = hosts if hosts is not None else [("localhost", 5672)]
         self._connection_cycle = self.cycle_hosts()
-        self.transport = None
-        self.protocol = None
+        self.connection: Optional[aio_pika.RobustConnection] = None
+        self.channel: Optional[aio_pika.RobustChannel] = None
         self.ssl = ssl
-
-    async def channel(self):
-        if self.protocol is not None:
-            return await self.protocol.channel()
+        self._connect_lock = asyncio.Lock()
 
     def cycle_hosts(self, shuffle=False):
         if shuffle:
@@ -66,58 +58,55 @@ class AmqpConnection:
         """Connect to AMQP broker. On failure this function will endlessly try reconnecting.
         Do nothing if already connected or connecting.
         """
-        if self.protocol is not None and self.protocol.state in [CONNECTING, OPEN]:
-            return
+        async with self._connect_lock:
+            if self.is_connected:
+                return
 
-        delay = FibonaccianBackoff(limit=60.0)
-        for host, port in self._connection_cycle:
-            try:
-                self.transport, self.protocol = await aioamqp_connect(
-                    loop=self.loop,
-                    host=host,
-                    port=port,
-                    login=self.username,
-                    password=self.password,
-                    virtualhost=self.virtualhost,
-                    ssl=self.ssl,
-                )
-            except (
-                aioamqp_exceptions.AmqpClosedConnection,
-                asyncio.TimeoutError,
-                ConnectionError,
-            ) as e:
-                next_delay = delay.next()
-                logger.warning(
-                    f"failed to connect to {host}:{port}, error <{e.__class__.__name__}> {e}, "
-                    f"retrying in {next_delay} seconds"
-                )
-                await asyncio.sleep(next_delay)
-            except OSError as e:
-                # Connection-related errors are mostly represented by `ConnectionError`,
-                # except for some like `socket.gaierror`, which fall into broader `OSError`
-                next_delay = delay.next()
-                logger.warning(
-                    f"failed to connect to {host}:{port}, error <{e.__class__.__name__}> {e}, "
-                    f"retrying in {next_delay} seconds"
-                )
-                await asyncio.sleep(next_delay)
-            except Exception as e:
-                logger.error(
-                    f"connection failed, not retrying: <{e.__class__.__name__}> {e}"
-                )
-                raise
-            else:
-                logger.info(f"wait connection to {host}:{port}")
-                break
+            delay = FibonaccianBackoff(limit=60.0)
+            for host, port in self._connection_cycle:
+                try:
+                    kwargs = {}
+                    if self.ssl:
+                        kwargs["ssl"] = True
+
+                    self.connection = await aio_pika.connect_robust(
+                        host=host,
+                        port=port,
+                        login=self.username,
+                        password=self.password,
+                        virtualhost=self.virtualhost,
+                        loop=self.loop or asyncio.get_running_loop(),
+                        **kwargs,
+                    )
+                    self.channel = await self.connection.channel()
+                    logger.info(f"wait connection to {host}:{port}")
+                    break
+                except (ConnectionError, OSError, AMQPException) as e:
+                    next_delay = delay.next()
+                    logger.warning(
+                        f"failed to connect to {host}:{port}, error <{e.__class__.__name__}> {e}, "
+                        f"retrying in {next_delay} seconds"
+                    )
+                    await asyncio.sleep(next_delay)
+                except Exception as e:
+                    logger.error(
+                        f"connection failed, not retrying: <{e.__class__.__name__}> {e}"
+                    )
+                    raise
 
     async def disconnect(self):
-        if self.protocol is not None and self.protocol.state in [CONNECTING, OPEN]:
-            await self.protocol.close()
+        async with self._connect_lock:
+            if self.channel and not self.channel.is_closed:
+                await self.channel.close()
+            if self.connection and not self.connection.is_closed:
+                await self.connection.close()
+            self.channel = None
+            self.connection = None
 
     @property
     def is_connected(self):
         """Property, required for rpc to check readiness"""
-        return bool(self.protocol) and self.protocol.state == OPEN
+        return self.connection is not None and not self.connection.is_closed
 
 
 class AsyncAmqpRpc:
@@ -149,18 +138,17 @@ class AsyncAmqpRpc:
         self.raw = raw
         self.queue_params = queue_params
         self.exchange_params = exchange_params
-        self.start_subscriptions = subscriptions or []
+        self.start_subscriptions = list(subscriptions) if subscriptions else []
         self.default_response_timeout = default_response_timeout
         self.shutdown_timeout = shutdown_timeout
         self.connection = connection
         self.prefetch_count = prefetch_count
         self.keep_running = True
-        self.channel = None
-        self.callback_queue = None
+        self.callback_queue: Optional[aio_pika.RobustQueue] = None
         self.callback_exchange = callback_exchange
         self._responses: Dict[str, asyncio.Future] = {}
         self._tasks = set()
-        self._subscriptions = set()
+        self._consumers = {}  # Map of (consumer_tag) -> queue
         self.connection_delay = connection_delay
         self._connect_lock = asyncio.Lock()
 
@@ -169,82 +157,29 @@ class AsyncAmqpRpc:
             return data.encode("utf-8"), False
         return data, True
 
-    async def _reset_connection_state(self):
-        async with self._connect_lock:
-            self.channel = None
-            self.callback_queue = None
-            await self.connection.disconnect()
-
-    async def _publish_with_retry(
-        self, *, exchange: str, destination: str, properties: Mapping, payload: bytes
-    ):
-        for attempt in range(2):
-            try:
-                if not (
-                    self.connection.is_connected
-                    and self.channel
-                    and self.channel.is_open
-                ):
-                    await self.connect()
-                await self.channel.basic_publish(
-                    exchange_name=exchange,
-                    routing_key=destination,
-                    properties=properties,
-                    payload=payload,
-                )
-                return
-            except (
-                aioamqp_exceptions.AmqpClosedConnection,
-                asyncio.TimeoutError,
-                ConnectionError,
-                OSError,
-            ) as e:
-                if attempt >= 1:
-                    raise
-                logger.warning(
-                    f"send_rpc publish failed: <{e.__class__.__name__}> {e}, reconnecting and retrying"
-                )
-                await self._reset_connection_state()
-                await asyncio.sleep(self.connection_delay)
-
     async def connect(self):
         async with self._connect_lock:
-            if (
-                self.connection.is_connected
-                and self.channel
-                and self.channel.is_open
-                and self.callback_queue
-            ):
+            if self.connection.is_connected and self.callback_queue:
                 return
 
             await self.connection.connect()
-            self.channel = await self.connection.channel()
+            channel = self.connection.channel
 
-            result = await self.channel.queue_declare(exclusive=True)
-            self.callback_queue = result["queue"]
+            self.callback_queue = await channel.declare_queue(exclusive=True)
 
-            # setup client
             if self.callback_exchange != "":
-                # operation not permitted on default exchange
-                await self.channel.exchange_declare(
-                    exchange_name=self.callback_exchange,
-                    type_name="topic",
+                exchange = await channel.declare_exchange(
+                    name=self.callback_exchange,
+                    type=aio_pika.ExchangeType.TOPIC,
                     durable=True,
                 )
-                await self.channel.queue_bind(
-                    queue_name=self.callback_queue,
-                    exchange_name=self.callback_exchange,
-                    routing_key=self.callback_queue,
+                await self.callback_queue.bind(
+                    exchange=exchange,
+                    routing_key=self.callback_queue.name,
                 )
 
-            await self.channel.basic_consume(
-                callback=self._on_response,
-                queue_name=self.callback_queue,
-            )
-
-            logger.debug(f'listening on callback queue {result["queue"]}')
-
-    # AMQP server implementation
+            await self.callback_queue.consume(self._on_response, no_ack=False)
+            logger.debug(f"listening on callback queue {self.callback_queue.name}")
 
     async def declare(
         self,
@@ -265,33 +200,41 @@ class AsyncAmqpRpc:
         """
         if routing_key is None:
             routing_key = queue
-        if exchange_params is None:
-            exchange_params = dict(type_name="topic", durable=True)
-        if queue_params is None:
-            queue_params = dict(
-                durable=True,
-                arguments={
-                    "x-dead-letter-exchange": "DLX",
-                    "x-dead-letter-routing-key": "dlx_rpc",
-                },
-            )
-        if exchange != "":
-            # operation not permitted on default exchange
-            await self.channel.exchange_declare(
-                exchange_name=exchange, **exchange_params
-            )
-        result = await self.channel.queue_declare(queue_name=queue, **queue_params)
-        queue = result["queue"]  # in case queue name was generated by broker
-        if exchange != "":
-            # operation not permitted on default exchange
-            await self.channel.queue_bind(
-                queue_name=queue, exchange_name=exchange, routing_key=routing_key
-            )
-        await self.channel.basic_qos(
-            prefetch_count=self.prefetch_count,
-            prefetch_size=0,
-            connection_global=False,
+
+        exchange_params = exchange_params or dict(type_name="topic", durable=True)
+        mapped_ex_params = dict(exchange_params)
+        if "type_name" in mapped_ex_params:
+            type_name = mapped_ex_params.pop("type_name")
+            if type_name == "topic":
+                mapped_ex_params["type"] = aio_pika.ExchangeType.TOPIC
+            elif type_name == "direct":
+                mapped_ex_params["type"] = aio_pika.ExchangeType.DIRECT
+            elif type_name == "fanout":
+                mapped_ex_params["type"] = aio_pika.ExchangeType.FANOUT
+            else:
+                mapped_ex_params["type"] = type_name
+
+        queue_params = queue_params or dict(
+            durable=True,
+            arguments={
+                "x-dead-letter-exchange": "DLX",
+                "x-dead-letter-routing-key": "dlx_rpc",
+            },
         )
+
+        channel = self.connection.channel
+
+        ex = None
+        if exchange != "":
+            ex = await channel.declare_exchange(name=exchange, **mapped_ex_params)
+
+        q = await channel.declare_queue(name=queue, **queue_params)
+
+        if exchange != "":
+            await q.bind(exchange=ex, routing_key=routing_key)
+
+        await channel.set_qos(prefetch_count=self.prefetch_count)
+        return q, ex
 
     async def subscribe(
         self,
@@ -320,23 +263,26 @@ class AsyncAmqpRpc:
         """
         if routing_key is None:
             routing_key = queue
-        await self.declare(
+
+        q, _ = await self.declare(
             queue=queue,
             exchange=exchange,
             routing_key=routing_key,
             queue_params=self.queue_params,
             exchange_params=self.exchange_params,
         )
-        result = await self.channel.basic_consume(
-            callback=partial(self._on_request, request_handler=request_handler),
-            queue_name=queue,
+
+        consumer_tag = await q.consume(
+            partial(self._on_request, request_handler=request_handler)
         )
-        consumer_tag = result["consumer_tag"]
-        self._subscriptions.add(consumer_tag)
+
+        self._consumers[consumer_tag] = q
+
         if add_to_start:
             params = (request_handler, queue, exchange, routing_key)
             if params not in self.start_subscriptions:
                 self.start_subscriptions.append(params)
+
         logger.debug(
             f"subscribed to queue {queue}, bound to exchange {exchange} with key {routing_key} "
             f"(consumer tag {consumer_tag})"
@@ -349,63 +295,60 @@ class AsyncAmqpRpc:
 
         :param consumer_tag: consumer tag returned by `subscribe()`
         """
-        logger.debug(f"unsubscribed from a queue (consumer tag {consumer_tag})")
-        await self.channel.basic_cancel(consumer_tag=consumer_tag)
+        if consumer_tag in self._consumers:
+            q = self._consumers.pop(consumer_tag)
+            await q.cancel(consumer_tag)
+            logger.debug(f"unsubscribed from a queue (consumer tag {consumer_tag})")
 
-    async def _on_request(self, channel, body, envelope, properties, request_handler):
+    async def _on_request(self, message: aio_pika.IncomingMessage, request_handler):
         """Run handle_rpc() in background."""
-        task = asyncio.ensure_future(
-            self.handle_rpc(channel, body, envelope, properties, request_handler)
-        )
+        task = asyncio.ensure_future(self.handle_rpc(message, request_handler))
         self._tasks.add(task)
-        task.add_done_callback(lambda fut: self._tasks.remove(fut))
+        task.add_done_callback(lambda fut: self._tasks.discard(fut))
 
     async def handle_rpc(
         self,
-        channel: Channel,
-        body: bytes,
-        envelope: Envelope,
-        properties: Properties,
+        message: aio_pika.IncomingMessage,
         request_handler,
     ):
         """Process request with handler and send response if needed."""
-        try:
-            data = body if self.raw else body.decode("utf-8")
-            logger.debug(
-                f"> handle_rpc: data {data}, routing_key {properties.reply_to}, "
-                f"correlation_id {properties.correlation_id}"
-            )
-            response = request_handler(data)
-            if inspect.isawaitable(response):
-                response = await response
-        except Exception as e:
-            logger.error(
-                f"handle_rpc. error <{e.__class__.__name__}> {e}, routing_key {properties.reply_to}, "
-                f"correlation_id {properties.correlation_id}"
-            )
-            await channel.basic_client_nack(delivery_tag=envelope.delivery_tag)
-        else:
-            responding = properties.reply_to is not None and response is not None
-            logger.debug(
-                f'{"< " * responding}handle_rpc: responding? {responding}, routing_key {properties.reply_to}, '
-                f"correlation_id {properties.correlation_id}, result {response}"
-            )
-            if responding:
-                response_params = dict(
-                    payload=response if self.raw else response.encode("utf-8"),
-                    exchange_name="",
-                    routing_key=properties.reply_to,
+        async with message.process(requeue=True, ignore_processed=True):
+            try:
+                data = message.body if self.raw else message.body.decode("utf-8")
+                logger.debug(
+                    f"> handle_rpc: data {data}, routing_key {message.reply_to}, "
+                    f"correlation_id {message.correlation_id}"
                 )
+                response = request_handler(data)
+                if inspect.isawaitable(response):
+                    response = await response
+            except Exception as e:
+                logger.error(
+                    f"handle_rpc. error <{e.__class__.__name__}> {e}, routing_key {message.reply_to}, "
+                    f"correlation_id {message.correlation_id}"
+                )
+                await message.reject(requeue=True)
+            else:
+                responding = message.reply_to is not None and response is not None
+                logger.debug(
+                    f'{"< " * responding}handle_rpc: responding? {responding}, routing_key {message.reply_to}, '
+                    f"correlation_id {message.correlation_id}, result {response}"
+                )
+                if responding:
+                    if isinstance(response, bytes):
+                        payload = response
+                    else:
+                        payload = str(response).encode("utf-8")
+                    reply_msg = aio_pika.Message(
+                        body=payload,
+                        correlation_id=message.correlation_id,
+                    )
 
-                if properties.correlation_id:
-                    response_params["properties"] = {
-                        "correlation_id": properties.correlation_id
-                    }
-
-                await channel.basic_publish(**response_params)
-
-            if channel.is_open:
-                await channel.basic_client_ack(delivery_tag=envelope.delivery_tag)
+                    default_exchange = self.connection.channel.default_exchange
+                    await default_exchange.publish(
+                        reply_msg,
+                        routing_key=message.reply_to,
+                    )
 
     async def run_server(self):
         """Main routine for the server."""
@@ -413,23 +356,25 @@ class AsyncAmqpRpc:
             while self.keep_running:
                 try:
                     await self.connect()
-                    self._subscriptions.clear()
+                    self._consumers.clear()
                     for params in self.start_subscriptions:
                         await self.subscribe(*params, add_to_start=False)
-                    await self.connection.protocol.wait_closed()
-                except (
-                    aioamqp_exceptions.AmqpClosedConnection,
-                    asyncio.TimeoutError,
-                    ConnectionError,
-                    OSError,
-                ) as e:
+
+                    # Wait for connection to close
+                    close_event = asyncio.Event()
+
+                    def on_close(*args, **kwargs):
+                        if not close_event.is_set():
+                            close_event.set()
+
+                    self.connection.connection.close_callbacks.add(on_close)
+                    await close_event.wait()
+                except Exception as e:
+                    if not self.keep_running:
+                        break
                     logger.warning(
                         f"amqp connection lost: <{e.__class__.__name__}> {e}, reconnecting"
                     )
-                    async with self._connect_lock:
-                        self.channel = None
-                        self.callback_queue = None
-                        await self.connection.disconnect()
                     await asyncio.sleep(self.connection_delay)
                     continue
         finally:
@@ -437,13 +382,13 @@ class AsyncAmqpRpc:
 
     async def run(self, app=None):
         """aiohttp-compatible on_startup coroutine."""
-        asyncio.ensure_future(self.run_server())
+        self._server_task = asyncio.ensure_future(self.run_server())
         await self.wait_connected()
         logger.info("Waiting finished. Connected successfully.")
 
     async def stop(self, app=None):
         """aiohttp-compatible on_shutdown coroutine."""
-        for consumer_tag in self._subscriptions:
+        for consumer_tag in list(self._consumers.keys()):
             await self.unsubscribe(consumer_tag)
         if self._tasks:
             logger.info(f"waiting for {len(self._tasks)} task(s) to finish normally")
@@ -480,24 +425,34 @@ class AsyncAmqpRpc:
         Raises `ServiceUnavailableError` on response timeout.
         """
         payload, raw = self._prepare_payload(data)
-        properties = dict()
-        if await_response:
-            if correlation_id is None:
-                correlation_id = str(uuid.uuid4())
-            properties = {
-                "reply_to": self.callback_queue,
-                "correlation_id": correlation_id,
-            }
-        logger.debug(
-            f"< send_rpc: destination {destination}, data {data}, "
-            f"awaiting? {await_response}, timeout {timeout}, properties {properties}"
+
+        if await_response and correlation_id is None:
+            correlation_id = str(uuid.uuid4())
+
+        if not (self.connection.is_connected and self.connection.channel):
+            await self.connect()
+
+        msg = aio_pika.Message(
+            body=payload,
+            reply_to=self.callback_queue.name if await_response else None,
+            correlation_id=correlation_id if await_response else None,
         )
 
-        await self._publish_with_retry(
-            exchange=exchange,
-            destination=destination,
-            properties=properties,
-            payload=payload,
+        logger.debug(
+            f"< send_rpc: destination {destination}, data {data}, "
+            f"awaiting? {await_response}, timeout {timeout}, correlation_id {correlation_id}"
+        )
+
+        channel = self.connection.channel
+
+        if exchange == "":
+            ex = channel.default_exchange
+        else:
+            ex = await channel.get_exchange(exchange)
+
+        await ex.publish(
+            msg,
+            routing_key=destination,
         )
 
         if await_response:
@@ -513,7 +468,10 @@ class AsyncAmqpRpc:
 
     async def _await_response(self, correlation_id, timeout):
         """Wait for a response with given correlation id. Blocks current Task."""
-        self._responses[correlation_id] = asyncio.get_event_loop().create_future()
+        if correlation_id in self._responses:
+            raise ValueError(f"correlation_id {correlation_id} is already in use")
+
+        self._responses[correlation_id] = asyncio.get_running_loop().create_future()
         try:
             await asyncio.wait_for(self._responses[correlation_id], timeout=timeout)
             return self._responses[correlation_id].result()
@@ -526,114 +484,27 @@ class AsyncAmqpRpc:
         finally:
             self._responses.pop(correlation_id, None)
 
-    async def _on_response(
-        self, channel: Channel, body: bytes, envelope: Envelope, properties: Properties
-    ):
+    async def _on_response(self, message: aio_pika.IncomingMessage):
         """Set response result. Called by aioamqp on a message in callback queue."""
-        if properties.correlation_id in self._responses:
-            fut = self._responses[properties.correlation_id]
-            if not fut.cancelled() and not fut.done():
-                fut.set_result(body)
-        else:
-            logger.warning(
-                f"unexpected message with correlation_id {properties.correlation_id}."
-            )
-
-        if channel.is_open:
-            await channel.basic_client_ack(delivery_tag=envelope.delivery_tag)
+        async with message.process():
+            correlation_id = message.correlation_id
+            if correlation_id in self._responses:
+                fut = self._responses[correlation_id]
+                if not fut.cancelled() and not fut.done():
+                    fut.set_result(message.body)
+            else:
+                logger.warning(
+                    f"unexpected message with correlation_id {correlation_id}."
+                )
 
     async def wait_connected(self):
-        while not all([self.connection.is_connected, self.channel]):
+        while not (self.connection.is_connected and self.callback_queue):
+            if hasattr(self, "_server_task") and self._server_task.done():
+                exc = self._server_task.exception()
+                if exc:
+                    raise exc
+                break
+            if not self.keep_running:
+                break
             logger.debug(f"Waiting connection for {self.connection_delay}s...")
             await asyncio.sleep(self.connection_delay)
-
-
-async def aioamqp_connect(
-    host="localhost",
-    port=None,
-    login="guest",
-    password="guest",
-    virtualhost="/",
-    ssl=False,
-    login_method="AMQPLAIN",
-    insist=False,
-    protocol_factory=AmqpProtocol,
-    *,
-    verify_ssl=True,
-    loop=None,
-    timeout=None,
-    **kwargs,
-):
-    """Convenient method to connect to an AMQP broker
-    :param host:          the host to connect to
-    :param port:          broker port
-    :param login:         login
-    :param password:      password
-    :param virtualhost:   AMQP virtualhost to use for this connection
-    :param ssl:           bool: Create an SSL connection instead of a plain unencrypted one
-                          SSLContext: Set custom SSLContext object
-    :param verify_ssl:    Verify server's SSL certificate (True by default)
-    :param login_method:  AMQP auth method
-    :param insist:        Insist on connecting to a server
-    :param protocol_factory: Factory to use, if you need to subclass AmqpProtocol
-    :param loop:          Set the event loop to use
-    :param kwargs:        Arguments to be given to the protocol_factory instance
-    :return:              a tuple (transport, protocol) of an AmqpProtocol instance
-    """
-    SSL_PORT = 5671
-    DEFAULT_PORT = 5672
-
-    if loop is None:
-        loop = asyncio.get_event_loop()
-
-    def factory():
-        return protocol_factory(loop=loop, **kwargs)
-
-    create_connection_kwargs = {}
-
-    if ssl:
-        ssl_context = (
-            ssl_module.create_default_context() if isinstance(ssl, bool) else ssl
-        )
-        if not verify_ssl:
-            ssl_context.check_hostname = False
-            ssl_context.verify_mode = ssl_module.CERT_NONE
-        create_connection_kwargs["ssl"] = ssl_context
-
-    if port is None:
-        if ssl:
-            port = SSL_PORT
-        else:
-            port = DEFAULT_PORT
-
-    transport, protocol = await loop.create_connection(
-        factory, host, port, **create_connection_kwargs
-    )
-
-    # these 2 flags *may* show up in sock.type. They are only available on linux
-    # see https://bugs.python.org/issue21327
-    nonblock = getattr(socket, "SOCK_NONBLOCK", 0)
-    cloexec = getattr(socket, "SOCK_CLOEXEC", 0)
-    sock = transport.get_extra_info("socket")
-    if sock is not None and (sock.type & ~nonblock & ~cloexec) == socket.SOCK_STREAM:
-        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-
-    try:
-        await protocol.start_connection(
-            host,
-            port,
-            login,
-            password,
-            virtualhost,
-            ssl=ssl,
-            login_method=login_method,
-            insist=insist,
-        )
-    except Exception:
-        try:
-            await protocol.wait_closed(timeout=timeout)
-        finally:
-            transport.close()
-        raise
-
-    return transport, protocol

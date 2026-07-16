@@ -9,9 +9,6 @@ from tests.conftest import (
     RANDOM_QUEUE,
     TEST_DESTINATION,
     RESPONSE_CORR_ID,
-    MockEnvelope,
-    MockProperties,
-    DELIVERY_TAG,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -153,8 +150,7 @@ class TestOnResponse:
         await rpc._on_response(
             channel=rpc.channel,
             body=body,
-            envelope=MockEnvelope(),
-            properties=MockProperties(),
+            message=MockMessage(body),
         )
         assert rpc._responses[RESPONSE_CORR_ID].done()
         assert rpc._responses[RESPONSE_CORR_ID].result() == body
@@ -165,7 +161,6 @@ class TestOnResponse:
         await rpc._on_response(
             channel=rpc.channel,
             body=b"resp",
-            envelope=MockEnvelope(),
-            properties=MockProperties(),
+            message=MockMessage(body),
         )
         rpc.channel.basic_client_ack.assert_called_once_with(delivery_tag=DELIVERY_TAG)

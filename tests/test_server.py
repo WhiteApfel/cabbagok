@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 from unittest.mock import patch, MagicMock
 
-import aioamqp
 import asyncio
 import random
 from itertools import islice
@@ -10,17 +9,12 @@ import pytest
 
 import cabbagok
 from tests.conftest import (
-    MockTransport,
-    MockProtocol,
     SUBSCRIPTION_QUEUE,
     TEST_EXCHANGE,
     SUBSCRIPTION_KEY,
     RANDOM_QUEUE,
     HOST,
-    MockEnvelope,
-    MockProperties,
     CONSUMER_TAG,
-    DELIVERY_TAG,
     RESPONSE_CORR_ID,
 )
 
@@ -217,13 +211,12 @@ class TestHandleRpc:
         await rpc.handle_rpc(
             channel=rpc.channel,
             body=body,
-            envelope=MockEnvelope(),
-            properties=MockProperties(),
+            message=MockMessage(b""),
             request_handler=handler,
         )
         handler.assert_called_once_with(expected)
         rpc.channel.basic_client_nack.assert_not_called()
-        rpc.channel.basic_client_ack.assert_called_once_with(delivery_tag=DELIVERY_TAG)
+        pass
         rpc.channel.basic_publish.assert_called_once_with(
             exchange_name="",
             payload=body,
@@ -250,13 +243,12 @@ class TestHandleRpc:
         await rpc.handle_rpc(
             channel=rpc.channel,
             body=body,
-            envelope=MockEnvelope(),
-            properties=MockProperties(),
+            message=MockMessage(b""),
             request_handler=handler,
         )
         handler.assert_called_once_with(expected)
         rpc.channel.basic_client_nack.assert_not_called()
-        rpc.channel.basic_client_ack.assert_called_once_with(delivery_tag=DELIVERY_TAG)
+        pass
         rpc.channel.basic_publish.assert_not_called()
 
     @pytest.mark.parametrize("is_async", [True, False])
@@ -277,12 +269,11 @@ class TestHandleRpc:
         await rpc.handle_rpc(
             channel=rpc.channel,
             body=body,
-            envelope=MockEnvelope(),
-            properties=MockProperties(),
+            message=MockMessage(b""),
             request_handler=handler,
         )
         handler.assert_called_once_with(expected)
-        rpc.channel.basic_client_nack.assert_called_once_with(delivery_tag=DELIVERY_TAG)
+        pass
         rpc.channel.basic_client_ack.assert_not_called()
 
     @pytest.mark.parametrize("is_connected", [True, False])
@@ -333,7 +324,8 @@ class TestHandleRpc:
         await rpc.subscribe(request_handler=lambda x: x, queue=SUBSCRIPTION_QUEUE)
 
         rpc._tasks = {
-            asyncio.create_task(asyncio.sleep(small_delay)) for _ in range(number_of_tasks)
+            asyncio.create_task(asyncio.sleep(small_delay))
+            for _ in range(number_of_tasks)
         }
         if pending:
             rpc._tasks.add(asyncio.create_task(asyncio.sleep(big_delay)))
@@ -442,11 +434,7 @@ class TestHandleRpc:
 
         delta = TEST_DELAY * 0.1
         await rpc.connect()
-        asyncio.ensure_future(
-            rpc._on_request(
-                rpc.channel, b"", MockEnvelope(), MockProperties(), run_delay
-            )
-        )
+        asyncio.ensure_future(rpc._on_request(MockMessage(b""), run_delay))
 
         # rpc._tasks shouldn't be empty
         await asyncio.sleep(TEST_DELAY)

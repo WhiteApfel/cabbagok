@@ -1,6 +1,25 @@
 CHANGELOG
 =========
 
+2.0.0 (Unreleased)
+------------------
+
+**Breaking Changes & Major Migration**
+- Migrated underlying driver from `aioamqp` to the modern `aio-pika` library (#1)
+- Dropped manual `aioamqp_connect` loop and `FibonaccianBackoff` retries. Now relying on `aio_pika.RobustConnection` for automatic network recovery.
+- Internal infrastructure significantly simplified (~250 lines of code removed).
+
+**Bug Fixes**
+- Fixed `Set changed size during iteration` crash in `stop()` method by iterating over a copied list.
+- Fixed lost `callback_queue` on reconnects (now gracefully recreated by `RobustConnection`).
+- Fixed silent swallowing of exceptions from the background `run_server` task in `wait_connected()`.
+- Fixed potential double-iteration/mutation bug of `start_subscriptions` during runtime subscriptions.
+- Fixed `KeyError` in `_on_request` by using safe `_tasks.discard()`.
+- Fixed raw encoding mismatch crashes (ensuring bytes/string fallbacks behave predictably).
+- Replaced deprecated `asyncio.get_event_loop()` usage with `get_running_loop()`.
+- Fixed `correlation_id` collisions silently overriding pending Futures (now raises ValueError).
+
+
 1.2.0 (2026-02-10)
 ------------------
 
