@@ -1,10 +1,12 @@
 CHANGELOG
 =========
 
-2.0.0 (Unreleased)
+2.0.1 (2026-07-16)
 ------------------
 
 **Breaking Changes & Major Migration**
+- Renamed package and module from `cabbage` to `cabbagok`.
+- Modernized Python 3.10+ type hints.
 - Migrated underlying driver from `aioamqp` to the modern `aio-pika` library (#1)
 - Dropped manual `aioamqp_connect` loop and `FibonaccianBackoff` retries. Now relying on `aio_pika.RobustConnection` for automatic network recovery.
 - Internal infrastructure significantly simplified (~250 lines of code removed).
