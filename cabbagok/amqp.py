@@ -6,7 +6,7 @@ import random
 import uuid
 from functools import partial
 from itertools import cycle
-from typing import Optional, Callable, Union, Awaitable, Mapping, Dict, Any, Generator, Iterable, Tuple
+from typing import Callable, Awaitable, Mapping,  Any, Generator, Iterable
 
 import aio_pika
 from aio_pika.exceptions import AMQPException
@@ -23,11 +23,11 @@ class ServiceUnavailableError(Exception):
 class AmqpConnection:
     def __init__(
         self,
-        hosts: Optional[Iterable[Tuple[str, int]]] = None,
+        hosts: Iterable[tuple[str, int]] | None = None,
         username: str = "guest",
         password: str = "guest",
         virtualhost: str = "/",
-        loop: Optional[asyncio.AbstractEventLoop] = None,
+        loop: asyncio.AbstractEventLoop | None = None,
         ssl: bool = False,
     ) -> None:
         """
@@ -38,18 +38,18 @@ class AmqpConnection:
         :param loop: asyncio event loop, default current event loop
         :param ssl: bool, uses ssl if True, default False
         """
-        self.loop: Optional[asyncio.AbstractEventLoop] = loop
+        self.loop: asyncio.AbstractEventLoop | None = loop
         self.username: str = username
         self.password: str = password
         self.virtualhost: str = virtualhost
-        self.hosts: list[Tuple[str, int]] = list(hosts) if hosts is not None else [("localhost", 5672)]
-        self._connection_cycle: Generator[Tuple[str, int], None, None] = self.cycle_hosts()
-        self.connection: Optional[aio_pika.RobustConnection] = None
-        self.channel: Optional[aio_pika.RobustChannel] = None
+        self.hosts: list[tuple[str, int]] = list(hosts) if hosts is not None else [("localhost", 5672)]
+        self._connection_cycle: Generator[tuple[str, int], None, None] = self.cycle_hosts()
+        self.connection: aio_pika.RobustConnection | None = None
+        self.channel: aio_pika.RobustChannel | None = None
         self.ssl: bool = ssl
         self._connect_lock: asyncio.Lock = asyncio.Lock()
 
-    def cycle_hosts(self, shuffle: bool = False) -> Generator[Tuple[str, int], None, None]:
+    def cycle_hosts(self, shuffle: bool = False) -> Generator[tuple[str, int], None, None]:
         if shuffle:
             random.shuffle(self.hosts)
         yield from cycle(self.hosts)
@@ -65,7 +65,7 @@ class AmqpConnection:
             delay_val = 1.0
             for host, port in self._connection_cycle:
                 try:
-                    kwargs: Dict[str, Any] = {}
+                    kwargs: dict[str, Any] = {}
                     if self.ssl:
                         kwargs["ssl"] = True
 
@@ -113,9 +113,9 @@ class AsyncAmqpRpc:
     def __init__(
         self,
         connection: AmqpConnection,
-        exchange_params: Optional[Mapping[str, Any]] = None,
-        queue_params: Optional[Mapping[str, Any]] = None,
-        subscriptions: Optional[list[Tuple]] = None,
+        exchange_params: Mapping[str, Any] | None = None,
+        queue_params: Mapping[str, Any] | None = None,
+        subscriptions: list[tuple] | None = None,
         prefetch_count: int = 1,
         raw: bool = False,
         default_response_timeout: float = 15.0,
@@ -136,23 +136,23 @@ class AsyncAmqpRpc:
         :param shutdown_timeout: timeout for handlers to finish gracefully on shutdown
         """
         self.raw: bool = raw
-        self.queue_params: Optional[Mapping[str, Any]] = queue_params
-        self.exchange_params: Optional[Mapping[str, Any]] = exchange_params
-        self.start_subscriptions: list[Tuple] = list(subscriptions) if subscriptions else []
+        self.queue_params: Mapping[str, Any] | None = queue_params
+        self.exchange_params: Mapping[str, Any] | None = exchange_params
+        self.start_subscriptions: list[tuple] = list(subscriptions) if subscriptions else []
         self.default_response_timeout: float = default_response_timeout
         self.shutdown_timeout: float = shutdown_timeout
         self.connection: AmqpConnection = connection
         self.prefetch_count: int = prefetch_count
         self.keep_running: bool = True
-        self.callback_queue: Optional[aio_pika.RobustQueue] = None
+        self.callback_queue: aio_pika.RobustQueue | None = None
         self.callback_exchange: str = callback_exchange
-        self._responses: Dict[str, asyncio.Future] = {}
+        self._responses: dict[str, asyncio.Future] = {}
         self._tasks: set[asyncio.Task] = set()
-        self._consumers: Dict[str, aio_pika.RobustQueue] = {}  # Map of (consumer_tag) -> queue
+        self._consumers: dict[str, aio_pika.RobustQueue] = {}  # Map of (consumer_tag) -> queue
         self.connection_delay: float = connection_delay
         self._connect_lock: asyncio.Lock = asyncio.Lock()
 
-    def _prepare_payload(self, data: Union[str, bytes]) -> Tuple[bytes, bool]:
+    def _prepare_payload(self, data: str | bytes) -> tuple[bytes, bool]:
         if isinstance(data, str):
             return data.encode("utf-8"), False
         return data, True
@@ -187,10 +187,10 @@ class AsyncAmqpRpc:
         self,
         queue: str,
         exchange: str = "",
-        routing_key: Optional[str] = None,
-        queue_params: Optional[Mapping[str, Any]] = None,
-        exchange_params: Optional[Mapping[str, Any]] = None,
-    ) -> Tuple[aio_pika.RobustQueue, Optional[aio_pika.RobustExchange]]:
+        routing_key: str | None = None,
+        queue_params: Mapping[str, Any] | None = None,
+        exchange_params: Mapping[str, Any] | None = None,
+    ) -> tuple[aio_pika.RobustQueue, aio_pika.RobustExchange | None]:
         """
         Set up necessary objects — exchange, queue, binding, QoS.
 
@@ -241,15 +241,15 @@ class AsyncAmqpRpc:
 
     async def subscribe(
         self,
-        request_handler: Union[
-            Callable[[str], Optional[str]],
-            Callable[[bytes], Optional[bytes]],
-            Callable[[str], Awaitable[Optional[str]]],
-            Callable[[bytes], Awaitable[Optional[bytes]]],
-        ],
+        request_handler: (
+            Callable[[str], str | None]
+            | Callable[[bytes], bytes | None]
+            | Callable[[str], Awaitable[str | None]]
+            | Callable[[bytes], Awaitable[bytes | None]]
+        ),
         queue: str,
         exchange: str = "",
-        routing_key: Optional[str] = None,
+        routing_key: str | None = None,
         add_to_start: bool = False,
     ) -> str:
         """
@@ -317,7 +317,7 @@ class AsyncAmqpRpc:
         """Process request with handler and send response if needed."""
         async with message.process(requeue=True, ignore_processed=True):
             try:
-                data: Union[str, bytes] = message.body if self.raw else message.body.decode("utf-8")
+                data: str | bytes = message.body if self.raw else message.body.decode("utf-8")
                 logger.debug(
                     f"> handle_rpc: data {data!r}, routing_key {message.reply_to}, "
                     f"correlation_id {message.correlation_id}"
@@ -418,12 +418,12 @@ class AsyncAmqpRpc:
     async def send_rpc(
         self,
         destination: str,
-        data: Union[str, bytes],
+        data: str | bytes,
         exchange: str = "",
         await_response: bool = True,
-        timeout: Optional[float] = None,
-        correlation_id: Optional[str] = None,
-    ) -> Union[str, bytes, None]:
+        timeout: float | None = None,
+        correlation_id: str | None = None,
+    ) -> str | bytes | None:
         """
         Execute a method on remote server. Sends `data` to `destination` routing key.
 
