@@ -1,24 +1,24 @@
 isort:
-	@isort --profile black ./cabbagok/
-	@isort --profile black ./tests/
+	@uv run isort --profile black ./cabbagok/
+	@uv run isort --profile black ./tests/
 
 
 black:
-	@black ./cabbagok/ --preview
-	@black ./tests/ --preview
+	@uv run black ./cabbagok/ --preview
+	@uv run black ./tests/ --preview
 
 
 install: uninstall
-	pip install .
+	uv pip install .
 	@echo "Done"
 
 
 uninstall:
-	@pip uninstall cabbagok -y
+	@uv pip uninstall cabbagok
 
 
 test:
-	@pytest --cov=cabbagok
+	@uv run pytest --cov=cabbagok
 
 
 clean:
@@ -41,14 +41,14 @@ clean:
 	@rm -rf *.egg-info
 
 install-dev: uninstall
-	@pip install -Ur requirements-dev.txt
-	@pip install -e .
+	@uv pip install -Ur requirements-dev.txt
+	@uv pip install -e .
 
 build:
-	@python setup.py sdist bdist_wheel
+	@uv build
 
 upload:
-	@twine upload dist/*
+	@uv publish dist/*
 
 publish:
 	@make clean
