@@ -9,8 +9,20 @@ from itertools import islice
 import pytest
 
 import cabbagok
-from tests.conftest import MockTransport, MockProtocol, SUBSCRIPTION_QUEUE, TEST_EXCHANGE, SUBSCRIPTION_KEY, \
-    RANDOM_QUEUE, HOST, MockEnvelope, MockProperties, CONSUMER_TAG, DELIVERY_TAG, RESPONSE_CORR_ID
+from tests.conftest import (
+    MockTransport,
+    MockProtocol,
+    SUBSCRIPTION_QUEUE,
+    TEST_EXCHANGE,
+    SUBSCRIPTION_KEY,
+    RANDOM_QUEUE,
+    HOST,
+    MockEnvelope,
+    MockProperties,
+    CONSUMER_TAG,
+    DELIVERY_TAG,
+    RESPONSE_CORR_ID,
+)
 
 pytestmark = pytest.mark.asyncio
 TEST_DELAY = 0.2
@@ -19,26 +31,32 @@ TEST_DELAY = 0.2
 class TestConnect:
     """AsyncAmqpRpc.connect"""
 
-    @pytest.mark.parametrize('exchange', ['', 'seldom-exchange', 'public', 'private'])
+    @pytest.mark.parametrize("exchange", ["", "seldom-exchange", "public", "private"])
     async def test_ok(self, event_loop, exchange):
         connection = cabbagok.AmqpConnection(hosts=[(HOST, 5672)], loop=event_loop)
         rpc = cabbagok.AsyncAmqpRpc(connection=connection)
         rpc.callback_exchange = exchange
-        with patch('cabbagok.amqp.aioamqp_connect') as mock_connect:
+        with patch("cabbagok.amqp.aioamqp_connect") as mock_connect:
             mock_connect.return_value = (MockTransport(), MockProtocol())
             await rpc.connect()
         mock_connect.assert_called_once()
         # check that client is set up correctly:
-        assert isinstance(rpc.channel, aioamqp.channel.Channel)  # actually it's a mock pretending to be a Channel
+        assert isinstance(
+            rpc.channel, aioamqp.channel.Channel
+        )  # actually it's a mock pretending to be a Channel
         rpc.channel.queue_declare.assert_called_with(exclusive=True)
-        rpc.channel.basic_consume.assert_called_once_with(callback=rpc._on_response,
-                                                          queue_name=rpc.callback_queue)
-        if rpc.callback_exchange != '':
+        rpc.channel.basic_consume.assert_called_once_with(
+            callback=rpc._on_response, queue_name=rpc.callback_queue
+        )
+        if rpc.callback_exchange != "":
             rpc.channel.exchange_declare.assert_called_once_with(
-                exchange_name=rpc.callback_exchange, type_name='topic', durable=True)
-            rpc.channel.queue_bind.assert_called_once_with(queue_name=rpc.callback_queue,
-                                                           exchange_name=rpc.callback_exchange,
-                                                           routing_key=rpc.callback_queue)
+                exchange_name=rpc.callback_exchange, type_name="topic", durable=True
+            )
+            rpc.channel.queue_bind.assert_called_once_with(
+                queue_name=rpc.callback_queue,
+                exchange_name=rpc.callback_exchange,
+                routing_key=rpc.callback_queue,
+            )
         else:
             rpc.channel.exchange_declare.assert_not_called()
             rpc.channel.queue_bind.assert_not_called()
@@ -53,24 +71,47 @@ class TestSubscribe:
 
         rpc = cabbagok.AsyncAmqpRpc(
             connection=connection,
-            queue_params=dict(passive=False, durable=True, exclusive=True, auto_delete=True),
-            exchange_params=dict(type_name='fanout', passive=False, durable=True, auto_delete=True))
+            queue_params=dict(
+                passive=False, durable=True, exclusive=True, auto_delete=True
+            ),
+            exchange_params=dict(
+                type_name="fanout", passive=False, durable=True, auto_delete=True
+            ),
+        )
         await rpc.connect()
         assert rpc.channel.queue_declare.call_count == 1
         assert rpc.channel.basic_consume.call_count == 1
 
-        await rpc.subscribe(exchange=TEST_EXCHANGE, queue=SUBSCRIPTION_QUEUE, routing_key=SUBSCRIPTION_KEY,
-                            request_handler=request_handler)
+        await rpc.subscribe(
+            exchange=TEST_EXCHANGE,
+            queue=SUBSCRIPTION_QUEUE,
+            routing_key=SUBSCRIPTION_KEY,
+            request_handler=request_handler,
+        )
         assert rpc.channel.queue_declare.call_count == 2
         assert rpc.channel.basic_consume.call_count == 2
         rpc.channel.basic_qos.assert_called_once_with(
-            prefetch_count=rpc.prefetch_count, prefetch_size=0, connection_global=False)
+            prefetch_count=rpc.prefetch_count, prefetch_size=0, connection_global=False
+        )
         rpc.channel.exchange_declare.assert_called_once_with(
-            exchange_name=TEST_EXCHANGE, type_name='fanout', passive=False, durable=True, auto_delete=True)
+            exchange_name=TEST_EXCHANGE,
+            type_name="fanout",
+            passive=False,
+            durable=True,
+            auto_delete=True,
+        )
         rpc.channel.queue_bind.assert_called_once_with(
-            exchange_name=TEST_EXCHANGE, queue_name=SUBSCRIPTION_QUEUE, routing_key=SUBSCRIPTION_KEY)
+            exchange_name=TEST_EXCHANGE,
+            queue_name=SUBSCRIPTION_QUEUE,
+            routing_key=SUBSCRIPTION_KEY,
+        )
         rpc.channel.queue_declare.assert_called_with(
-            queue_name=SUBSCRIPTION_QUEUE, auto_delete=True, durable=True, exclusive=True, passive=False)
+            queue_name=SUBSCRIPTION_QUEUE,
+            auto_delete=True,
+            durable=True,
+            exclusive=True,
+            passive=False,
+        )
         # rpc.channel.basic_consume.assert_called_with(  # partial() != partial()
         #     callback=partial(rpc._on_request, request_handler=request_handler), queue_name=SUBSCRIPTION_QUEUE)
 
@@ -84,10 +125,16 @@ class TestSubscribe:
         assert rpc.channel.queue_declare.call_count == 2
         assert rpc.channel.basic_consume.call_count == 2
         rpc.channel.basic_qos.assert_called_once_with(
-            prefetch_count=rpc.prefetch_count, prefetch_size=0, connection_global=False)
+            prefetch_count=rpc.prefetch_count, prefetch_size=0, connection_global=False
+        )
         rpc.channel.queue_declare.assert_called_with(
-            queue_name=SUBSCRIPTION_QUEUE, durable=True, arguments={'x-dead-letter-exchange': 'DLX',
-                                                                    'x-dead-letter-routing-key': 'dlx_rpc'})
+            queue_name=SUBSCRIPTION_QUEUE,
+            durable=True,
+            arguments={
+                "x-dead-letter-exchange": "DLX",
+                "x-dead-letter-routing-key": "dlx_rpc",
+            },
+        )
         # rpc.channel.basic_consume.assert_called_with(
         #     callback=rpc._on_request, queue_name=SUBSCRIPTION_QUEUE)
         # It is an error to attempt declaring or binding on default exchange:
@@ -101,14 +148,20 @@ class TestSubscribe:
         assert rpc.channel.queue_declare.call_count == 1
         assert rpc.channel.basic_consume.call_count == 1
 
-        await rpc.subscribe(request_handler=lambda x: x, exchange='', queue='')
+        await rpc.subscribe(request_handler=lambda x: x, exchange="", queue="")
         assert rpc.channel.queue_declare.call_count == 2
         assert rpc.channel.basic_consume.call_count == 2
         rpc.channel.basic_qos.assert_called_once_with(
-            prefetch_count=rpc.prefetch_count, prefetch_size=0, connection_global=False)
+            prefetch_count=rpc.prefetch_count, prefetch_size=0, connection_global=False
+        )
         rpc.channel.queue_declare.assert_called_with(
-            queue_name='', durable=True, arguments={'x-dead-letter-exchange': 'DLX',
-                                                    'x-dead-letter-routing-key': 'dlx_rpc'})
+            queue_name="",
+            durable=True,
+            arguments={
+                "x-dead-letter-exchange": "DLX",
+                "x-dead-letter-routing-key": "dlx_rpc",
+            },
+        )
         # rpc.channel.basic_consume.assert_called_with(
         #     callback=rpc._on_request, queue_name=RANDOM_QUEUE)
         # We are still on default exchange:
@@ -133,66 +186,107 @@ class TestHandleRpc:
     def request_handler_factory(async_, responding=True, fail=False):
         """Creates a request_handler the server can call on the payload."""
         if fail:
-            return MagicMock(side_effect=Exception('Handler error'))
+            return MagicMock(side_effect=Exception("Handler error"))
         if async_:
+
             async def request_handler(request):
                 return request if responding else None
+
         else:
+
             def request_handler(request):
                 return request if responding else None
+
         return MagicMock(side_effect=request_handler)
 
-    @pytest.mark.parametrize('is_async', [True, False])
-    @pytest.mark.parametrize('body, expected', [
-        (b'', ''),
-        (b'Test message body. \xd0\xa2\xd0\xb5\xd1\x81\xd1\x82', 'Test message body. Тест'),
-    ])
+    @pytest.mark.parametrize("is_async", [True, False])
+    @pytest.mark.parametrize(
+        "body, expected",
+        [
+            (b"", ""),
+            (
+                b"Test message body. \xd0\xa2\xd0\xb5\xd1\x81\xd1\x82",
+                "Test message body. Тест",
+            ),
+        ],
+    )
     async def test_responding(self, connection, body, expected, is_async):
         handler = self.request_handler_factory(is_async, responding=True, fail=False)
         rpc = cabbagok.AsyncAmqpRpc(connection=connection)
         await rpc.connect()
-        await rpc.handle_rpc(channel=rpc.channel, body=body, envelope=MockEnvelope(), properties=MockProperties(),
-                             request_handler=handler)
+        await rpc.handle_rpc(
+            channel=rpc.channel,
+            body=body,
+            envelope=MockEnvelope(),
+            properties=MockProperties(),
+            request_handler=handler,
+        )
         handler.assert_called_once_with(expected)
         rpc.channel.basic_client_nack.assert_not_called()
         rpc.channel.basic_client_ack.assert_called_once_with(delivery_tag=DELIVERY_TAG)
         rpc.channel.basic_publish.assert_called_once_with(
-            exchange_name='', payload=body, properties={'correlation_id': RESPONSE_CORR_ID}, routing_key=RANDOM_QUEUE)
+            exchange_name="",
+            payload=body,
+            properties={"correlation_id": RESPONSE_CORR_ID},
+            routing_key=RANDOM_QUEUE,
+        )
 
-    @pytest.mark.parametrize('is_async', [True, False])
-    @pytest.mark.parametrize('body, expected', [
-        (b'', ''),
-        (b'Test message body. \xd0\xa2\xd0\xb5\xd1\x81\xd1\x82', 'Test message body. Тест'),
-    ])
+    @pytest.mark.parametrize("is_async", [True, False])
+    @pytest.mark.parametrize(
+        "body, expected",
+        [
+            (b"", ""),
+            (
+                b"Test message body. \xd0\xa2\xd0\xb5\xd1\x81\xd1\x82",
+                "Test message body. Тест",
+            ),
+        ],
+    )
     async def test_not_responding(self, connection, body, expected, is_async):
         """Handler returns None instead of str/bytes => no response needed."""
         handler = self.request_handler_factory(is_async, responding=False, fail=False)
         rpc = cabbagok.AsyncAmqpRpc(connection=connection)
         await rpc.connect()
-        await rpc.handle_rpc(channel=rpc.channel, body=body, envelope=MockEnvelope(), properties=MockProperties(),
-                             request_handler=handler)
+        await rpc.handle_rpc(
+            channel=rpc.channel,
+            body=body,
+            envelope=MockEnvelope(),
+            properties=MockProperties(),
+            request_handler=handler,
+        )
         handler.assert_called_once_with(expected)
         rpc.channel.basic_client_nack.assert_not_called()
         rpc.channel.basic_client_ack.assert_called_once_with(delivery_tag=DELIVERY_TAG)
         rpc.channel.basic_publish.assert_not_called()
 
-    @pytest.mark.parametrize('is_async', [True, False])
-    @pytest.mark.parametrize('body, expected', [
-        (b'', ''),
-        (b'Test message body. \xd0\xa2\xd0\xb5\xd1\x81\xd1\x82', 'Test message body. Тест'),
-    ])
+    @pytest.mark.parametrize("is_async", [True, False])
+    @pytest.mark.parametrize(
+        "body, expected",
+        [
+            (b"", ""),
+            (
+                b"Test message body. \xd0\xa2\xd0\xb5\xd1\x81\xd1\x82",
+                "Test message body. Тест",
+            ),
+        ],
+    )
     async def test_exception(self, connection, body, expected, is_async):
         handler = self.request_handler_factory(is_async, fail=True)
         rpc = cabbagok.AsyncAmqpRpc(connection=connection)
         await rpc.connect()
-        await rpc.handle_rpc(channel=rpc.channel, body=body, envelope=MockEnvelope(), properties=MockProperties(),
-                             request_handler=handler)
+        await rpc.handle_rpc(
+            channel=rpc.channel,
+            body=body,
+            envelope=MockEnvelope(),
+            properties=MockProperties(),
+            request_handler=handler,
+        )
         handler.assert_called_once_with(expected)
         rpc.channel.basic_client_nack.assert_called_once_with(delivery_tag=DELIVERY_TAG)
         rpc.channel.basic_client_ack.assert_not_called()
 
-    @pytest.mark.parametrize('is_connected', [True, False])
-    @pytest.mark.parametrize('channel', [True, False])
+    @pytest.mark.parametrize("is_connected", [True, False])
+    @pytest.mark.parametrize("channel", [True, False])
     async def test_wait_connection(self, is_connected, channel):
         """
         Checking for execution time of cabbagok.AsyncAmqpRpc.wait_connected()
@@ -222,8 +316,8 @@ class TestHandleRpc:
         await asyncio.sleep(TEST_DELAY)
         assert future.done()
 
-    @pytest.mark.parametrize('number_of_tasks', [0, 1, 10])
-    @pytest.mark.parametrize('pending', [True, False])
+    @pytest.mark.parametrize("number_of_tasks", [0, 1, 10])
+    @pytest.mark.parametrize("pending", [True, False])
     async def test_launch_server(self, connection, number_of_tasks, pending):
         """
         Test for cabbagok.AsyncAmqpRpc.stop(). All tasks should execute asynchronously.
@@ -238,10 +332,11 @@ class TestHandleRpc:
         await rpc.connect()
         await rpc.subscribe(request_handler=lambda x: x, queue=SUBSCRIPTION_QUEUE)
 
-        rpc._tasks = [asyncio.sleep(small_delay) for i in range(number_of_tasks)]
+        rpc._tasks = {
+            asyncio.create_task(asyncio.sleep(small_delay)) for _ in range(number_of_tasks)
+        }
         if pending:
-            # a big delay task
-            rpc._tasks.append(asyncio.sleep(big_delay))
+            rpc._tasks.add(asyncio.create_task(asyncio.sleep(big_delay)))
 
         await asyncio.sleep(TEST_DELAY)
         future = asyncio.ensure_future(rpc.stop())
@@ -304,9 +399,16 @@ class TestHandleRpc:
             def __init__(self, delay):
                 self.connection = FakeConnection(delay)
                 self.keep_running = True
-                self.start_subscriptions = [[random.random() for _ in range(5)] for _ in range(5)]
+                self.channel = None
+                self.callback_queue = None
+                self.connection_delay = 0
+                self._connect_lock = asyncio.Lock()
+                self._subscriptions = set()
+                self.start_subscriptions = [
+                    [random.random() for _ in range(5)] for _ in range(5)
+                ]
 
-            async def subscribe(self, *params):
+            async def subscribe(self, *params, **kwargs):
                 pass
 
             async def connect(self):
@@ -339,9 +441,12 @@ class TestHandleRpc:
             await asyncio.sleep(big_delay)
 
         delta = TEST_DELAY * 0.1
-        rpc = await rpc
         await rpc.connect()
-        asyncio.ensure_future(rpc._on_request(rpc.channel, b'', MockEnvelope(), MockProperties(), run_delay))
+        asyncio.ensure_future(
+            rpc._on_request(
+                rpc.channel, b"", MockEnvelope(), MockProperties(), run_delay
+            )
+        )
 
         # rpc._tasks shouldn't be empty
         await asyncio.sleep(TEST_DELAY)
@@ -351,7 +456,7 @@ class TestHandleRpc:
         await asyncio.sleep(TEST_DELAY + delta)
         assert len(rpc._tasks) == 0
 
-    @pytest.mark.parametrize('shuffle', [True, False])
+    @pytest.mark.parametrize("shuffle", [True, False])
     async def test_shuffle(self, shuffle):
         """
         Test for cabbagok.AmqpConnection.cycle_hosts
@@ -368,7 +473,9 @@ class TestHandleRpc:
         connection = cabbagok.AmqpConnection(hosts_copy)
 
         # Retrieving one period of hosts after cycle hosts
-        retrieved_hosts_two_periods = list(islice(connection.cycle_hosts(shuffle), hosts_length * 2))
+        retrieved_hosts_two_periods = list(
+            islice(connection.cycle_hosts(shuffle), hosts_length * 2)
+        )
         retrieved_hosts = retrieved_hosts_two_periods[0:hosts_length]
 
         # Check for correct work of cycle

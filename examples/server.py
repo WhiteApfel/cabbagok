@@ -5,8 +5,7 @@ import logging
 from cabbagok import AmqpConnection, AsyncAmqpRpc
 
 logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s'
+    level=logging.DEBUG, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 )
 
 
@@ -18,11 +17,11 @@ async def handler(request: str) -> str:
 
 async def main(rpc):
     await rpc.connect()
-    await rpc.subscribe(handler, 'my_queue')
+    await rpc.subscribe(handler, "my_queue")
     await rpc.run_server()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     loop = asyncio.get_event_loop()
     connection = AmqpConnection()
     rpc = AsyncAmqpRpc(connection)

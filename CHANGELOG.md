@@ -1,6 +1,18 @@
 CHANGELOG
 =========
 
+1.2.0 (2026-02-10)
+------------------
+
+- Improve resilience to broker/network disconnects (retry on `AmqpClosedConnection` and related errors)
+- Reconnect loop in `run_server()` now restores subscriptions from `start_subscriptions` without duplication
+- `send_rpc()` made more reliable: publish retry with reconnect and internal refactor into helper methods
+- Concurrency safety: connection/channel initialization is serialized with an internal asyncio lock
+- Fix response awaiting edge-cases: cancel timed out futures and ignore late responses safely
+- Close transport on failed AMQP handshake to avoid dangling connections
+- Modernize tests for recent pytest/pytest-asyncio; integration tests skip when RabbitMQ management API is unavailable
+- Remove deprecated `asynctest` dev dependency
+
 1.1.0 (2024-04-04)
 ------------------
 

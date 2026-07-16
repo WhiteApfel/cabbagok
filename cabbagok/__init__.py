@@ -3,6 +3,6 @@
 from cabbagok import test_utils
 from .amqp import AmqpConnection, AsyncAmqpRpc, ServiceUnavailableError
 
-__all__ = ['ServiceUnavailableError', 'AmqpConnection', 'AsyncAmqpRpc', 'test_utils']
+__all__ = ["ServiceUnavailableError", "AmqpConnection", "AsyncAmqpRpc", "test_utils"]
 
-__version__ = '1.1.0'
+__version__ = "1.2.0"

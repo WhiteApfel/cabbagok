@@ -3,11 +3,14 @@ import logging
 from unittest.mock import MagicMock
 
 import pytest
+import pytest_asyncio
 import aioamqp
 
 import cabbagok
 
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s [%(levelname)s] %(name)s: %(message)s')
+logging.basicConfig(
+    level=logging.DEBUG, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+)
 
 
 @pytest.fixture
@@ -18,7 +21,7 @@ def connection(event_loop):
     return conn
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def rpc(connection):
     _rpc = cabbagok.AsyncAmqpRpc(connection=connection)
     await _rpc.connect()
@@ -28,45 +31,47 @@ async def rpc(connection):
 # some non-default values to use in tests
 
 
-HOST = 'fake_amqp_host'
-TEST_EXCHANGE = 'rpc_exchange'
-TEST_DESTINATION = 'rpc_destination'
-SUBSCRIPTION_QUEUE = 'rpc_subscription_queue'
-RANDOM_QUEUE = 'amq.gen-random_queue_name'
-SUBSCRIPTION_KEY = 'rpc_subscription_key'
-RESPONSE_CORR_ID = 'response_correlation_id'
-CONSUMER_TAG = 'some_consumer_tag'
+HOST = "fake_amqp_host"
+TEST_EXCHANGE = "rpc_exchange"
+TEST_DESTINATION = "rpc_destination"
+SUBSCRIPTION_QUEUE = "rpc_subscription_queue"
+RANDOM_QUEUE = "amq.gen-random_queue_name"
+SUBSCRIPTION_KEY = "rpc_subscription_key"
+RESPONSE_CORR_ID = "response_correlation_id"
+CONSUMER_TAG = "some_consumer_tag"
 DELIVERY_TAG = 10
 
 # aioamqp classes mocked as factory functions:
 
 
 def MockTransport():
-    return MagicMock(name='MockTransport')
+    return MagicMock(name="MockTransport")
 
 
 def MockProtocol():
-    m = MagicMock(spec=aioamqp.protocol.AmqpProtocol, name='MockProtocol')
+    m = MagicMock(spec=aioamqp.protocol.AmqpProtocol, name="MockProtocol")
     m.state = aioamqp.protocol.OPEN
     m.channel.return_value = MockChannel()
     return m
 
 
 def MockChannel():
-    m = MagicMock(spec=aioamqp.channel.Channel, name='MockChannel')
-    m.queue_declare.side_effect = lambda queue_name='', *a, **kw: {'queue': queue_name or RANDOM_QUEUE}
-    m.basic_consume.return_value = {'consumer_tag': CONSUMER_TAG}
+    m = MagicMock(spec=aioamqp.channel.Channel, name="MockChannel")
+    m.queue_declare.side_effect = lambda queue_name="", *a, **kw: {
+        "queue": queue_name or RANDOM_QUEUE
+    }
+    m.basic_consume.return_value = {"consumer_tag": CONSUMER_TAG}
     return m
 
 
 def MockEnvelope():
-    m = MagicMock(spec=aioamqp.envelope.Envelope, name='MockEnvelope')
+    m = MagicMock(spec=aioamqp.envelope.Envelope, name="MockEnvelope")
     m.delivery_tag = DELIVERY_TAG
     return m
 
 
 def MockProperties():
-    m = MagicMock(spec=aioamqp.properties.Properties, name='MockProperties')
+    m = MagicMock(spec=aioamqp.properties.Properties, name="MockProperties")
     m.correlation_id = RESPONSE_CORR_ID
     m.reply_to = RANDOM_QUEUE
     return m
